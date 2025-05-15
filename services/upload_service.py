@@ -73,7 +73,7 @@ def upload_to_azure_ai(file_name: str, file_bytes: bytes) -> dict:
             "IssuingAuthority": result["analyzeResult"]["documents"][0]["fields"].get("IssuingAuthority", {}).get("valueString", ""),
             "certificateNo": result["analyzeResult"]["documents"][0]["fields"].get("certificateNo", {}).get("valueString", ""),
             "firstIssuedDate": result["analyzeResult"]["documents"][0]["fields"].get("firstIssuedDate", {}).get("valueDate", ""),
-            "ExtendedValidity": result["analyzeResult"]["documents"][0]["fields"].get("ExtendedValidity", {}).get("valueDate", ""),
+            "extendedValidityDate": result["analyzeResult"]["documents"][0]["fields"].get("extendedValidityDate", {}).get("valueDate", ""),
             "deviceTable": result["analyzeResult"]["documents"][0]["fields"].get("deviceTable", {}).get("valueArray", ""),
             "legislation": result["analyzeResult"]["documents"][0]["fields"].get("legislation", {}).get("valueString", ""),
         }
