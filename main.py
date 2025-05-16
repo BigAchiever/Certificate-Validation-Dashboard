@@ -3,7 +3,7 @@ import pandas as pd
 from services.upload_service import upload_to_azure_ai
 
 # Streamlit UI
-st.title("PDF Document Uploader")
+st.title("Certificate Validation Dashboard")
 st.write("Upload a PDF to extract fields using Azure AI Document Intelligence")
 
 # Initialize session state for file processing
