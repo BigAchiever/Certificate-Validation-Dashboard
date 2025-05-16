@@ -1,104 +1,140 @@
-import requests
 import json
-import time
 import logging
+import time
+from datetime import datetime
+import requests
 from dotenv import load_dotenv
 import os
+import streamlit as st
 
-load_dotenv()  # Load from .env file
-
-AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
-AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY")
-AZURE_AI_MODEL_NAME = os.getenv("AZURE_AI_MODEL_NAME")
-
-BLOB_URL = os.getenv("BLOB_URL")
-SAS_TOKEN = os.getenv("SAS_TOKEN")
-CONTAINER_NAME = os.getenv("CONTAINER_NAME")
-
-from .push_to_blob import save_to_blob_storage
+# Load .env file for local development
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def upload_to_azure_ai(file_name: str, file_bytes: bytes) -> dict:
-    """Upload PDF to Azure AI Document Intelligence and extract fields."""
-    analyze_url = f"{AZURE_AI_ENDPOINT}/documentintelligence/documentModels/{AZURE_AI_MODEL_NAME}:analyze?api-version=2024-11-30"
+# Load secrets: Try Streamlit Cloud secrets first, fall back to .env
+try:
+    AZURE_AI_ENDPOINT = st.secrets["AZURE_AI_ENDPOINT"]
+    AZURE_AI_API_KEY = st.secrets["AZURE_AI_API_KEY"]
+    AZURE_AI_MODEL_NAME = st.secrets["AZURE_AI_MODEL_NAME"]
+    BLOB_URL = st.secrets["BLOB_URL"]
+    SAS_TOKEN = st.secrets["SAS_TOKEN"]
+    CONTAINER_NAME = st.secrets["CONTAINER_NAME"]
+    logger.info("Secrets loaded from Streamlit Cloud (st.secrets)")
+except (KeyError, AttributeError) as e:
+    logger.warning(f"Failed to load secrets from Streamlit Cloud: {e}. Falling back to .env file.")
+    AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+    AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY")
+    AZURE_AI_MODEL_NAME = os.getenv("AZURE_AI_MODEL_NAME")
+    BLOB_URL = os.getenv("BLOB_URL")
+    SAS_TOKEN = os.getenv("SAS_TOKEN")
+    CONTAINER_NAME = os.getenv("CONTAINER_NAME")
+    logger.info("Secrets loaded from .env file")
 
-    try:
-        # Step 1: Submit the document for analysis
-        headers = {
-            "Ocp-Apim-Subscription-Key": AZURE_AI_API_KEY,
-            "Content-Type": "application/pdf",
-        }
-        response = requests.post(analyze_url, headers=headers, data=file_bytes)
+# Debug configuration
+logger.info(f"AZURE_AI_ENDPOINT: {AZURE_AI_ENDPOINT}")
+logger.info(f"AZURE_AI_MODEL_NAME: {AZURE_AI_MODEL_NAME}")
+logger.info(f"BLOB_URL: {BLOB_URL}")
+logger.info(f"CONTAINER_NAME: {CONTAINER_NAME}")
 
-        logger.info(f"Analyze Response Code: {response.status_code}")
-        if response.status_code != 202:
-            if response.status_code == 429:
-                raise RuntimeError("Rate limit exceeded. Please try again later.")
-            elif response.status_code == 401:
-                raise RuntimeError("Authentication failed. Check your API key.")
-            elif response.status_code == 400:
-                raise RuntimeError("Bad request. Check the file format or model name.")
-            raise RuntimeError(f"Failed to analyze document: {response.status_code} - {response.text}")
+# Validate that all required secrets are loaded
+required_secrets = {
+    "AZURE_AI_ENDPOINT": AZURE_AI_ENDPOINT,
+    "AZURE_AI_API_KEY": AZURE_AI_API_KEY,
+    "AZURE_AI_MODEL_NAME": AZURE_AI_MODEL_NAME,
+    "BLOB_URL": BLOB_URL,
+    "SAS_TOKEN": SAS_TOKEN,
+    "CONTAINER_NAME": CONTAINER_NAME,
+}
+for key, value in required_secrets.items():
+    if not value:
+        raise ValueError(f"Missing required secret: {key}. Check your Streamlit Cloud secrets or .env file.")
 
-        # Step 2: Get the operation-location for polling
-        operation_location = response.headers.get("operation-location")
-        if not operation_location:
-            raise RuntimeError("Operation-Location header not found in response.")
+# Local storage path for development (optional)
+LOCAL_STORAGE = os.getenv("LOCAL_STORAGE", "local_storage")
+os.makedirs(LOCAL_STORAGE, exist_ok=True)  # Create local storage directory if it doesn't exist
 
-        # Step 3: Poll for the result with a timeout
-        max_attempts = 30
-        attempts = 0
+def save_to_blob_storage(file_name: str, fields: dict) -> None:
+    """Save extracted fields as JSON to Azure Blob Storage using SAS token, and optionally to local storage."""
+    # Validate fields
+    if not fields:
+        raise ValueError("Fields dictionary is empty. Cannot save to Blob Storage.")
 
-        while attempts < max_attempts:
-            time.sleep(2)
-            result_response = requests.get(operation_location, headers={"Ocp-Apim-Subscription-Key": AZURE_AI_API_KEY})
+    # Ensure required fields
+    if "documentName" not in fields or not fields["documentName"]:
+        logger.warning("documentName is missing or empty. Using default value.")
+        fields["documentName"] = "Unknown Declaration"
+    if "deviceName" not in fields or fields["deviceName"] is None:
+        logger.warning("deviceName is missing. Setting to empty list.")
+        fields["deviceName"] = []
 
-            if result_response.status_code != 200:
-                raise RuntimeError(f"Failed to poll result: {result_response.status_code} - {result_response.text}")
+    # Generate unique blob name
+    timestamp = str(int(datetime.now().timestamp() * 1000))
+    blob_name = f"{file_name.split('.')[0]}_result_{timestamp}.json"
 
-            result = result_response.json()
-            logger.info(f"Poll Status: {result['status']}")
-            attempts += 1
-
-            if result["status"] not in ["running", "notStarted"]:
-                break
-
-        if attempts >= max_attempts:
-            raise RuntimeError(f"Polling timed out after {max_attempts * 2} seconds.")
-
-        if result["status"] != "succeeded":
-            raise RuntimeError(f"Analysis failed: {result.get('error', 'Unknown error')}")
-
-        # Step 4: Extract fields from custom model
-        extracted_fields = {
-            "documentName": result["analyzeResult"]["documents"][0]["fields"].get("documentName", {}).get("valueString", ""),
-            "deviceName": result["analyzeResult"]["documents"][0]["fields"].get("deviceName", {}).get("valueString", ""),
-            "organizationName": result["analyzeResult"]["documents"][0]["fields"].get("organizationName", {}).get("valueString", ""),
-            "expiryDate": result["analyzeResult"]["documents"][0]["fields"].get("expiryDate", {}).get("valueDate", ""),
-            "IssuingAuthority": result["analyzeResult"]["documents"][0]["fields"].get("IssuingAuthority", {}).get("valueString", ""),
-            "certificateNo": result["analyzeResult"]["documents"][0]["fields"].get("certificateNo", {}).get("valueString", ""),
-            "firstIssuedDate": result["analyzeResult"]["documents"][0]["fields"].get("firstIssuedDate", {}).get("valueDate", ""),
-            "extendedValidityDate": result["analyzeResult"]["documents"][0]["fields"].get("extendedValidityDate", {}).get("valueDate", ""),
-            "deviceTable": result["analyzeResult"]["documents"][0]["fields"].get("deviceTable", {}).get("valueArray", ""),
-            "legislation": result["analyzeResult"]["documents"][0]["fields"].get("legislation", {}).get("valueString", ""),
-        }
-
-        # Step 5: Save to Blob Storage (call once)
+    # Save to local storage (for development)
+    if os.getenv("SAVE_LOCAL", "false").lower() == "true":
+        local_path = os.path.join(LOCAL_STORAGE, blob_name)
+        logger.info(f"Saving to local storage: {local_path}")
         try:
-            fields_for_storage = {
-                key: ", ".join(value) if isinstance(value, list) else str(value)
-                for key, value in extracted_fields.items()
-            }
-            save_to_blob_storage(file_name, fields_for_storage)
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(fields, f, indent=2)
+            logger.info(f"Successfully saved to local storage: {local_path}")
         except Exception as e:
-            logger.error(f"Failed to save to Blob Storage: {e}")
-            # Continue to return extracted fields even if Blob Storage fails
+            logger.error(f"Failed to save to local storage: {e}")
 
-        return extracted_fields
+    # Save to Azure Blob Storage
+    url = f"{BLOB_URL}{CONTAINER_NAME}/{blob_name}{SAS_TOKEN}"
 
-    except Exception as e:
-        logger.error(f"Error in upload_to_azure_ai: {e}")
-        raise
+    logger.info("Fields to be uploaded to Blob Storage:")
+    logger.info(json.dumps(fields, indent=2))
+    logger.info(f"Blob Name: {blob_name}")
+    logger.info(f"Blob URL: {url}")
+
+    # Retry logic for transient failures
+    max_retries = 3
+    attempt = 0
+    last_exception = None
+
+    while attempt < max_retries:
+        try:
+            response = requests.put(
+                url,
+                headers={
+                    "x-ms-blob-type": "BlockBlob",
+                    "Content-Type": "application/json",
+                    "x-ms-version": "2021-04-10",
+                },
+                data=json.dumps(fields, indent=2),
+            )
+
+            logger.info(f"Blob Save Response Code: {response.status_code}")
+            logger.info(f"Blob Save Response Body: {response.text}")
+
+            if response.status_code == 201:
+                logger.info(f"Successfully saved to Blob Storage: {blob_name}")
+                logger.info(f"Blob Path: {CONTAINER_NAME}/{blob_name}")
+                return
+            else:
+                if response.status_code == 403:
+                    raise RuntimeError("Authentication failed. Check your SAS token.")
+                elif response.status_code == 409:
+                    raise RuntimeError("Blob already exists. Try a different blob name.")
+                elif response.status_code == 400:
+                    raise RuntimeError("Bad request. Check the blob URL or data format.")
+                raise RuntimeError(
+                    f"Failed to save to Blob Storage: {response.status_code} - {response.text}"
+                )
+
+        except Exception as e:
+            last_exception = e
+            logger.error(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+            attempt += 1
+            if attempt < max_retries:
+                logger.info("Retrying in 2 seconds...")
+                time.sleep(2)
+
+    logger.error(f"Failed to save to Blob Storage after {max_retries} attempts.")
+    raise last_exception or RuntimeError("Failed to save to Blob Storage after retries.")

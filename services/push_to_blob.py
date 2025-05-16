@@ -5,24 +5,54 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 import os
+import streamlit as st
 
-load_dotenv()  # Load from .env file
-
-AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
-AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY")
-AZURE_AI_MODEL_NAME = os.getenv("AZURE_AI_MODEL_NAME")
-
-BLOB_URL = os.getenv("BLOB_URL")
-SAS_TOKEN = os.getenv("SAS_TOKEN")
-CONTAINER_NAME = os.getenv("CONTAINER_NAME")
+# Load .env file for local development
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load secrets: Try Streamlit Cloud secrets first, fall back to .env
+try:
+    # Access secrets from Streamlit Cloud (st.secrets)
+    AZURE_AI_ENDPOINT = st.secrets["AZURE_AI_ENDPOINT"]
+    AZURE_AI_API_KEY = st.secrets["AZURE_AI_API_KEY"]
+    AZURE_AI_MODEL_NAME = st.secrets["AZURE_AI_MODEL_NAME"]
+    BLOB_URL = st.secrets["BLOB_URL"]
+    SAS_TOKEN = st.secrets["SAS_TOKEN"]
+    CONTAINER_NAME = st.secrets["CONTAINER_NAME"]
+    logger.info("Secrets loaded from Streamlit Cloud (st.secrets)")
+except (KeyError, AttributeError) as e:
+    # Fallback to .env file for local development
+    logger.warning(f"Failed to load secrets from Streamlit Cloud: {e}. Falling back to .env file.")
+    AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+    AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY")
+    AZURE_AI_MODEL_NAME = os.getenv("AZURE_AI_MODEL_NAME")
+    BLOB_URL = os.getenv("BLOB_URL")
+    SAS_TOKEN = os.getenv("SAS_TOKEN")
+    CONTAINER_NAME = os.getenv("CONTAINER_NAME")
+    logger.info("Secrets loaded from .env file")
+
 # Debug configuration
+logger.info(f"AZURE_AI_ENDPOINT: {AZURE_AI_ENDPOINT}")
+logger.info(f"AZURE_AI_MODEL_NAME: {AZURE_AI_MODEL_NAME}")
 logger.info(f"BLOB_URL: {BLOB_URL}")
 logger.info(f"CONTAINER_NAME: {CONTAINER_NAME}")
+
+# Validate that all required secrets are loaded
+required_secrets = {
+    "AZURE_AI_ENDPOINT": AZURE_AI_ENDPOINT,
+    "AZURE_AI_API_KEY": AZURE_AI_API_KEY,
+    "AZURE_AI_MODEL_NAME": AZURE_AI_MODEL_NAME,
+    "BLOB_URL": BLOB_URL,
+    "SAS_TOKEN": SAS_TOKEN,
+    "CONTAINER_NAME": CONTAINER_NAME,
+}
+for key, value in required_secrets.items():
+    if not value:
+        raise ValueError(f"Missing required secret: {key}. Check your Streamlit Cloud secrets or .env file.")
 
 def save_to_blob_storage(file_name: str, fields: dict) -> None:
     """Save extracted fields as JSON to Azure Blob Storage using SAS token."""
