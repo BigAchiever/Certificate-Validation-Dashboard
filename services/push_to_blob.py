@@ -3,7 +3,18 @@ import logging
 import time
 from datetime import datetime
 import requests
-from config import BLOB_URL, SAS_TOKEN, CONTAINER_NAME
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Load from .env file
+
+AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY")
+AZURE_AI_MODEL_NAME = os.getenv("AZURE_AI_MODEL_NAME")
+
+BLOB_URL = os.getenv("BLOB_URL")
+SAS_TOKEN = os.getenv("SAS_TOKEN")
+CONTAINER_NAME = os.getenv("CONTAINER_NAME")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

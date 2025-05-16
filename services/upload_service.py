@@ -2,11 +2,19 @@ import requests
 import json
 import time
 import logging
-from config import (
-    AZURE_AI_ENDPOINT,
-    AZURE_AI_API_KEY,
-    AZURE_AI_MODEL_NAME,
-)
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Load from .env file
+
+AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY")
+AZURE_AI_MODEL_NAME = os.getenv("AZURE_AI_MODEL_NAME")
+
+BLOB_URL = os.getenv("BLOB_URL")
+SAS_TOKEN = os.getenv("SAS_TOKEN")
+CONTAINER_NAME = os.getenv("CONTAINER_NAME")
+
 from .push_to_blob import save_to_blob_storage
 
 # Configure logging
